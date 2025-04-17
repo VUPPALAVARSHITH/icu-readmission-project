@@ -2,72 +2,84 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import pickle
+from catboost import CatBoostClassifier, Pool
 
-# Load the trained CatBoost model using caching
-@st.cache_resource
-def load_model():
-    with open("catboost_model.pkl", "rb") as file:
-        model = pickle.load(file)
-    return model
+# 🔹 Load the trained model
+model_path = "catboost_model.pkl"
+with open(model_path, "rb") as f:
+    model = pickle.load(f)
 
-model = load_model()
+# 🔹 Define categorical columns (same as your training)
+categorical_columns = ['age', 'medical_specialty', 'diag_1', 'diag_2', 'diag_3',
+                       'glucose_test', 'A1Ctest', 'change', 'diabetes_med']
 
-# Sidebar – User input
-st.sidebar.header("📥 Enter Patient Information")
+# 🔹 Function to preprocess user inputs
+def preprocess_input(user_input):
+    input_df = pd.DataFrame([user_input])
+    
+    # Convert categorical columns to 'category' dtype
+    for col in categorical_columns:
+        input_df[col] = input_df[col].astype('category')
+    
+    # Ensure the columns match the model's expected order
+    input_df = input_df[['age', 'time_in_hospital', 'n_lab_procedures', 'n_procedures',
+                         'n_medications', 'n_outpatient', 'n_emergency', 'n_inpatient',
+                         'medical_specialty', 'diag_1', 'diag_2', 'diag_3', 'glucose_test',
+                         'A1Ctest', 'change', 'diabetes_med']]
+    
+    return input_df
 
-def get_user_input():
-    age = st.sidebar.slider("Age", 0, 100, 50)
-    time_in_hospital = st.sidebar.slider("Time in Hospital (days)", 1, 14, 5)
-    num_lab_procedures = st.sidebar.slider("Number of Lab Procedures", 0, 150, 40)
-    num_medications = st.sidebar.slider("Number of Medications", 0, 80, 10)
-    number_outpatient = st.sidebar.slider("Outpatient Visits", 0, 20, 0)
-    number_emergency = st.sidebar.slider("Emergency Visits", 0, 20, 0)
-    number_inpatient = st.sidebar.slider("Inpatient Visits", 0, 20, 0)
+# 🔹 Sidebar Input for user data
+st.sidebar.title("Patient Details for ICU Readmission Prediction")
 
-    data = {
-        "age": age,
-        "time_in_hospital": time_in_hospital,
-        "num_lab_procedures": num_lab_procedures,
-        "num_medications": num_medications,
-        "number_outpatient": number_outpatient,
-        "number_emergency": number_emergency,
-        "number_inpatient": number_inpatient,
-    }
-    return pd.DataFrame([data])
+age = st.sidebar.selectbox("Age Range", ['10-20', '20-30', '30-40', '40-50', '50-60', '60-70', '70-80', '80-90', '90+'])
+time_in_hospital = st.sidebar.number_input("Time in hospital (days)", min_value=0, max_value=365)
+n_lab_procedures = st.sidebar.number_input("Number of lab procedures", min_value=0, max_value=100)
+n_procedures = st.sidebar.number_input("Number of procedures", min_value=0, max_value=100)
+n_medications = st.sidebar.number_input("Number of medications", min_value=0, max_value=50)
+n_outpatient = st.sidebar.number_input("Number of outpatient visits", min_value=0, max_value=100)
+n_emergency = st.sidebar.number_input("Number of emergency visits", min_value=0, max_value=100)
+n_inpatient = st.sidebar.number_input("Number of inpatient visits", min_value=0, max_value=100)
 
-input_df = get_user_input()
+medical_specialty = st.sidebar.selectbox("Medical Specialty", ['Cardiology', 'Oncology', 'Endocrinology', 'Neurology'])
+diag_1 = st.sidebar.text_input("Diagnosis 1 code")
+diag_2 = st.sidebar.text_input("Diagnosis 2 code")
+diag_3 = st.sidebar.text_input("Diagnosis 3 code")
 
-# Main Area UI
-st.title("🏥 ICU Readmission Predictor")
-st.markdown("This app predicts whether a patient is at risk of readmission.")
+glucose_test = st.sidebar.selectbox("Glucose test result", ['Normal', 'Abnormal'])
+A1Ctest = st.sidebar.selectbox("A1C test done?", ['Yes', 'No'])
+change = st.sidebar.selectbox("Change in medications?", ['Yes', 'No'])
+diabetes_med = st.sidebar.selectbox("Is diabetes medication prescribed?", ['Yes', 'No'])
 
-# Tabs
-tab1, tab2 = st.tabs(["📊 Prediction", "ℹ️ Info"])
+# Gather the inputs into a dictionary
+user_input = {
+    'age': age,
+    'time_in_hospital': time_in_hospital,
+    'n_lab_procedures': n_lab_procedures,
+    'n_procedures': n_procedures,
+    'n_medications': n_medications,
+    'n_outpatient': n_outpatient,
+    'n_emergency': n_emergency,
+    'n_inpatient': n_inpatient,
+    'medical_specialty': medical_specialty,
+    'diag_1': diag_1,
+    'diag_2': diag_2,
+    'diag_3': diag_3,
+    'glucose_test': glucose_test,
+    'A1Ctest': A1Ctest,
+    'change': change,
+    'diabetes_med': diabetes_med
+}
 
-with tab1:
-    with st.expander("📋 Patient Data", expanded=True):
-        st.dataframe(input_df)
+# 🔹 Preprocess input data to match model
+input_df = preprocess_input(user_input)
 
-    if st.button("🚀 Predict Readmission"):
-        prediction = model.predict(input_df)[0]
-        st.subheader("🔍 Prediction Result")
+# 🔹 Predict
+proba = model.predict_proba(input_df)[0][1]
+prediction = model.predict(input_df)[0]
 
-        if prediction == 1:
-            st.markdown("🟥 **High risk of ICU readmission!** ❌")
-        else:
-            st.markdown("🟩 **Low risk of ICU readmission.** ✅")
+# 🔹 Display Prediction and Risk Score
+st.title("ICU Readmission Prediction")
+st.write(f"**Prediction:** {'Readmitted' if prediction == 1 else 'Not Readmitted'}")
+st.write(f"**Risk Score:** {proba:.2f}")
 
-with tab2:
-    st.markdown("""
-    - This dashboard uses a **CatBoost** model.
-    - Data is taken from a healthcare dataset.
-    - Adjust the sliders to simulate patient conditions.
-    """)
-
-# Optional download
-st.download_button(
-    label="📥 Download Input as CSV",
-    data=input_df.to_csv(index=False).encode('utf-8'),
-    file_name='patient_data.csv',
-    mime='text/csv'
-)
