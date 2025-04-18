@@ -114,6 +114,7 @@ if predict_button and not st.session_state.refresh:
             data=input_df,
             cat_features=categorical_cols,
             feature_names=list(input_df.columns)
+        )
         
         # Make prediction
         prediction = model.predict(prediction_pool)[0]
