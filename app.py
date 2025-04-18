@@ -12,8 +12,8 @@ import streamlit as st
 with open("catboost_model_smote_tomek.pkl", "rb") as f:
     model = pickle.load(f)
 
-# Load dataset to get column order
-df = pd.read_csv("preprocessed_hospital_readmissions.csv")
+# Load dataset to get column order and types
+df = pd.read_csv("hospital_readmissions.csv")
 df = df.dropna(subset=["readmitted"])
 
 # Select the same features used in training
@@ -21,6 +21,8 @@ categorical_cols = ['age', 'medical_specialty', 'diag_1', 'diag_2', 'diag_3',
                     'glucose_test', 'A1Ctest', 'change', 'diabetes_med']
 
 X = df.drop("readmitted", axis=1)
+
+# Convert categorical columns to category type
 for col in categorical_cols:
     X[col] = X[col].astype('category')
 
@@ -46,22 +48,26 @@ user_input = {
 
 # Format user input as a DataFrame
 input_df = pd.DataFrame([user_input])
+
+# Convert categorical columns in the input to match the training set
 for col in categorical_cols:
     input_df[col] = input_df[col].astype('category')
 
-# Ensure same order of columns as training data
+# Ensure the input dataframe has the same column order as the training data
 input_df = input_df[X.columns]
 
-# Create a Pool for prediction (required for categorical features)
-pool = Pool(input_df, cat_features=categorical_cols)
-
-# Predict
-proba = model.predict_proba(pool)[0][1]
-prediction = model.predict(pool)[0]
-label = "Readmitted" if prediction == 1 else "Not Readmitted"
-
-st.write(f"🚨 Prediction: {label}")
-st.write(f"📊 Risk Score: {proba:.2f}")
+# Create the CatBoost Pool (handling categorical features)
+try:
+    pool = Pool(input_df, cat_features=categorical_cols)
+    
+    # Predict the probability
+    proba = model.predict_proba(pool)[0][1]
+    prediction = model.predict(pool)[0]
+    label = "Readmitted" if prediction == 1 else "Not Readmitted"
+    st.write(f"🚨 Prediction: {label}")
+    st.write(f"📊 Risk Score: {proba:.2f}")
+except Exception as e:
+    st.error(f"Error during prediction: {str(e)}")
 
 # ============== SHAP Explanation (HTML Export) ==============
 shap.initjs()
