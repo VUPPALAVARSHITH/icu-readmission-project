@@ -1,8 +1,8 @@
 streamlit
 pandas
 numpy
-shap
-lime
 matplotlib
 catboost
+shap
+lime
 scikit-learn
