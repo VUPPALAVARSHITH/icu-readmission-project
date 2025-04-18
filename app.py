@@ -16,7 +16,7 @@ def load_model():
 
 @st.cache_data
 def load_data():
-    df = pd.read_csv("hospital_readmissions.csv")
+    df = pd.read_csv(r"C:\Users\varsh\OneDrive\Desktop\minor_project\preprocessed_hospital_readmissions.csv")
     df = df.dropna(subset=["readmitted"])
     X = df.drop("readmitted", axis=1)
     return df, X
