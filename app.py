@@ -1,114 +1,125 @@
+import streamlit as st
 import pandas as pd
 import shap
 import lime
 import lime.lime_tabular
-import matplotlib.pyplot as plt
-from catboost import CatBoostClassifier, Pool
-import pickle
 import numpy as np
-import streamlit as st
+import joblib
+from catboost import CatBoostClassifier, Pool
 
-# Load model
-with open("catboost_model_smote_tomek.pkl", "rb") as f:
-    model = pickle.load(f)
+# Load trained model
+model = joblib.load("catboost_model.pkl")
 
-# Load dataset to get column order and types
-df = pd.read_csv("preprocessed_hospital_readmissions.csv")
-df = df.dropna(subset=["readmitted"])
+# Define categorical features
+cat_features = ['age', 'medical_specialty', 'diag_1', 'diag_2', 'diag_3', 'glucose_test', 'A1Ctest', 'change', 'diabetes_med']
 
-# Select the same features used in training
-categorical_cols = ['age', 'medical_specialty', 'diag_1', 'diag_2', 'diag_3',
-                    'glucose_test', 'A1Ctest', 'change', 'diabetes_med']
+# Sidebar input form
+st.sidebar.title("Patient Data Input")
 
-X = df.drop("readmitted", axis=1)
+age = st.sidebar.selectbox("Age", ['0-10', '10-20', '20-30', '30-40', '40-50',
+                                    '50-60', '60-70', '70-80', '80-90', '90-100'])
 
-# Convert categorical columns to category type
-for col in categorical_cols:
-    X[col] = X[col].astype('category')
+time_in_hospital = st.sidebar.number_input("Time in Hospital (days)", min_value=1, max_value=30, value=10)
 
-# Collect user input dynamically
-user_input = {
-    'age': st.sidebar.selectbox('Age', ['60-70', '70-80', '80-90']),
-    'time_in_hospital': st.sidebar.slider('Time in hospital', 1, 100, 10),
-    'n_lab_procedures': st.sidebar.slider('Number of lab procedures', 1, 100, 45),
-    'n_procedures': st.sidebar.slider('Number of procedures', 1, 20, 6),
-    'n_medications': st.sidebar.slider('Number of medications', 1, 50, 18),
-    'n_outpatient': st.sidebar.slider('Number of outpatient visits', 1, 10, 3),
-    'n_emergency': st.sidebar.slider('Number of emergency visits', 1, 10, 2),
-    'n_inpatient': st.sidebar.slider('Number of inpatient visits', 1, 10, 1),
-    'medical_specialty': st.sidebar.selectbox('Medical Specialty', ['Cardiology', 'Endocrinology', 'Neurology']),
-    'diag_1': st.sidebar.text_input('Diagnosis 1', '428.0'),
-    'diag_2': st.sidebar.text_input('Diagnosis 2', '250.00'),
-    'diag_3': st.sidebar.text_input('Diagnosis 3', '401.9'),
-    'glucose_test': st.sidebar.selectbox('Glucose Test Result', ['Normal', 'Abnormal']),
-    'A1Ctest': st.sidebar.selectbox('A1C Test', ['Yes', 'No']),
-    'change': st.sidebar.selectbox('Medication Change', ['Yes', 'No']),
-    'diabetes_med': st.sidebar.selectbox('Diabetes Med Prescribed?', ['Yes', 'No'])
+n_lab_procedures = st.sidebar.slider("Number of Lab Procedures", min_value=0, max_value=100, value=45)
+n_procedures = st.sidebar.slider("Number of Procedures", min_value=0, max_value=10, value=6)
+n_medications = st.sidebar.slider("Number of Medications", min_value=0, max_value=100, value=18)
+
+n_outpatient = st.sidebar.number_input("Outpatient Visits", min_value=0, max_value=50, value=3)
+n_emergency = st.sidebar.number_input("Emergency Visits", min_value=0, max_value=50, value=2)
+n_inpatient = st.sidebar.number_input("Inpatient Visits", min_value=0, max_value=50, value=1)
+
+medical_specialty = st.sidebar.selectbox("Medical Specialty", ['Cardiology', 'InternalMedicine', 'Surgery-General',
+                                                               'Family/GeneralPractice', 'Emergency/Trauma'])
+
+diag_1 = st.sidebar.text_input("Diagnosis 1", value='428.0')
+diag_2 = st.sidebar.text_input("Diagnosis 2", value='250.00')
+diag_3 = st.sidebar.text_input("Diagnosis 3", value='401.9')
+
+glucose_test = st.sidebar.selectbox("Glucose Test Result", ['None', 'Normal', 'Abnormal'])
+A1Ctest = st.sidebar.checkbox("A1C Test Performed?")
+change = st.sidebar.checkbox("Change in Medications?")
+diabetes_med = st.sidebar.checkbox("Diabetes Medication Given?")
+
+# Format checkbox values
+A1Ctest_val = "Yes" if A1Ctest else "No"
+change_val = "Yes" if change else "No"
+diabetes_med_val = "Yes" if diabetes_med else "No"
+
+# Ordered input as expected by model
+input_dict = {
+    'time_in_hospital': time_in_hospital,
+    'n_lab_procedures': n_lab_procedures,
+    'n_procedures': n_procedures,
+    'n_medications': n_medications,
+    'n_outpatient': n_outpatient,
+    'n_emergency': n_emergency,
+    'n_inpatient': n_inpatient,
+    'age': age,
+    'medical_specialty': medical_specialty,
+    'diag_1': diag_1,
+    'diag_2': diag_2,
+    'diag_3': diag_3,
+    'glucose_test': glucose_test,
+    'A1Ctest': A1Ctest_val,
+    'change': change_val,
+    'diabetes_med': diabetes_med_val
 }
 
-# Format user input as a DataFrame
-input_df = pd.DataFrame([user_input])
+# Create DataFrame
+input_df = pd.DataFrame([input_dict])
 
-# Convert categorical columns in the input to match the training set
-for col in categorical_cols:
-    input_df[col] = input_df[col].astype('category')
+# Prediction section
+st.title("🔍 ICU Readmission Prediction")
 
-# Ensure the input dataframe has the same column order as the training data
-input_df = input_df[X.columns]
-
-# Create the CatBoost Pool (handling categorical features)
 try:
-    pool = Pool(input_df, cat_features=categorical_cols)
-    
-    # Predict the probability
+    pool = Pool(input_df, cat_features=cat_features)
     proba = model.predict_proba(pool)[0][1]
     prediction = model.predict(pool)[0]
-    label = "Readmitted" if prediction == 1 else "Not Readmitted"
-    st.write(f"🚨 Prediction: {label}")
-    st.write(f"📊 Risk Score: {proba:.2f}")
-except Exception as e:
-    st.error(f"Error during prediction: {str(e)}")
 
-# ============== SHAP Explanation (HTML Export) ==============
+    if prediction == 1:
+        st.error(f"🔴 Prediction: Patient is **likely to be readmitted** (Probability: {proba:.2f})")
+    else:
+        st.success(f"🟢 Prediction: Patient is **not likely to be readmitted** (Probability: {proba:.2f})")
+
+except Exception as e:
+    st.error(f"❌ Error during prediction: {e}")
+
+# Explainability section
+st.header("📊 Model Explainability")
+
+# SHAP Explanation
 try:
     shap.initjs()
     explainer = shap.TreeExplainer(model)
     shap_values = explainer.shap_values(input_df)
 
-    # Save SHAP force plot as HTML
-    shap_html = shap.force_plot(explainer.expected_value, shap_values, input_df)
-    shap.save_html("shap_explanation.html", shap_html)
-    st.write("✅ SHAP force plot saved.")
-except Exception as e:
-    st.error(f"Error during SHAP explanation: {str(e)}")
+    st.subheader("🔎 SHAP Force Plot")
+    st_shap = st.empty()
+    st_shap.html(shap.force_plot(explainer.expected_value, shap_values, input_df).data, height=300)
 
-# ============== LIME Explanation (PNG Export) ==============
+except Exception as e:
+    st.warning(f"⚠️ SHAP explanation not available: {e}")
+
+# LIME Explanation
 try:
-    X_lime = X.copy()
-    for col in categorical_cols:
-        X_lime[col] = X_lime[col].astype(str)
+    st.subheader("🔍 LIME Explanation")
 
-    lime_explainer = lime.lime_tabular.LimeTabularExplainer(
-        training_data=np.array(X_lime),
-        feature_names=X_lime.columns.tolist(),
-        class_names=["Not Readmitted", "Readmitted"],
-        categorical_features=[X_lime.columns.get_loc(c) for c in categorical_cols],
-        mode='classification'
+    # Encoding categorical variables for LIME
+    lime_input = pd.get_dummies(input_df)
+
+    explainer = lime.lime_tabular.LimeTabularExplainer(
+        training_data=lime_input.values,
+        feature_names=lime_input.columns,
+        mode="classification"
     )
 
-    input_lime = input_df.copy()
-    for col in categorical_cols:
-        input_lime[col] = input_lime[col].astype(str)
-
-    lime_exp = lime_explainer.explain_instance(
-        data_row=input_lime.iloc[0].values,
-        predict_fn=lambda x: model.predict_proba(pd.DataFrame(x, columns=input_df.columns))
+    exp = explainer.explain_instance(
+        lime_input.values[0],
+        model.predict_proba
     )
 
-    # Save as PNG
-    fig = lime_exp.as_pyplot_figure()
-    fig.savefig("lime_explanation.png", bbox_inches="tight")
-    plt.close()
-    st.write("✅ LIME explanation saved.")
+    st.components.v1.html(exp.as_html(), height=400)
+
 except Exception as e:
-    st.error(f"Error during LIME explanation: {str(e)}")
+    st.warning(f"⚠️ LIME explanation not available: {e}")
