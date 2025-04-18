@@ -19,7 +19,7 @@ def load_model():
 
 @st.cache_data
 def load_columns():
-    df = pd.read_csv("hospital_readmissions.csv")
+    df = pd.read_csv("preprocessed_hospital_readmissions")
     df = df.dropna(subset=["readmitted"])
     X = df.drop("readmitted", axis=1)
     categorical_cols = ['age', 'medical_specialty', 'diag_1', 'diag_2', 'diag_3',
