@@ -14,7 +14,8 @@ with open("catboost_model_smote_tomek.pkl", "rb") as f:
     model = pickle.load(f)
 
 # Load dataset to get column order
-df = pd.read_csv("C:/Users/varsh/OneDrive/Desktop/hospital_readmissions.csv")
+df = pd.read_csvdf = pd.read_csv("preprocessed_hospital_readmissions.csv")
+
 df = df.dropna(subset=["readmitted"])
 
 # Select the same features used in training
