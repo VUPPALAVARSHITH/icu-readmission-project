@@ -6,7 +6,7 @@ import lime
 import lime.lime_tabular
 import matplotlib.pyplot as plt
 import pickle
-from catboost import CatBoostClassifier
+from catboost import CatBoostClassifier, Pool
 
 # ========== Caching ==========
 @st.cache_resource
@@ -55,16 +55,23 @@ user_input = {
 
 # ========== Format Input ==========
 input_df = pd.DataFrame([user_input])
+
+# Match category dtype exactly as in training data
 for col in categorical_cols:
-    input_df[col] = input_df[col].astype('category')
+    input_df[col] = pd.Categorical(input_df[col], categories=X_train[col].cat.categories)
+
+# Ensure input columns match training columns
 input_df = input_df[X_train.columns]
+
+# Create a Pool object for prediction
+input_pool = Pool(data=input_df)
 
 # ========== Prediction ==========
 st.title("🏥 ICU Readmission Prediction")
 
 with st.expander("🔮 Prediction Result"):
-    prediction = model.predict(input_df)[0]
-    proba = model.predict_proba(input_df)[0][1]
+    prediction = model.predict(input_pool)[0]
+    proba = model.predict_proba(input_pool)[0][1]
 
     if prediction == 1:
         st.markdown("🔴 **Prediction: Patient is likely to be readmitted.**")
