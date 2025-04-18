@@ -1,9 +1,6 @@
 streamlit
 pandas
+numpy
 scikit-learn
 catboost
 imblearn
-numpy
-matplotlib        
-seaborn           
-openpyxl          
