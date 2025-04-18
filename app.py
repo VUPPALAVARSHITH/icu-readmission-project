@@ -70,39 +70,45 @@ except Exception as e:
     st.error(f"Error during prediction: {str(e)}")
 
 # ============== SHAP Explanation (HTML Export) ==============
-shap.initjs()
-explainer = shap.TreeExplainer(model)
-shap_values = explainer.shap_values(input_df)
+try:
+    shap.initjs()
+    explainer = shap.TreeExplainer(model)
+    shap_values = explainer.shap_values(input_df)
 
-# Save SHAP force plot as HTML
-shap_html = shap.force_plot(explainer.expected_value, shap_values, input_df)
-shap.save_html("shap_explanation.html", shap_html)
-st.write("✅ SHAP force plot saved.")
+    # Save SHAP force plot as HTML
+    shap_html = shap.force_plot(explainer.expected_value, shap_values, input_df)
+    shap.save_html("shap_explanation.html", shap_html)
+    st.write("✅ SHAP force plot saved.")
+except Exception as e:
+    st.error(f"Error during SHAP explanation: {str(e)}")
 
 # ============== LIME Explanation (PNG Export) ==============
-X_lime = X.copy()
-for col in categorical_cols:
-    X_lime[col] = X_lime[col].astype(str)
+try:
+    X_lime = X.copy()
+    for col in categorical_cols:
+        X_lime[col] = X_lime[col].astype(str)
 
-lime_explainer = lime.lime_tabular.LimeTabularExplainer(
-    training_data=np.array(X_lime),
-    feature_names=X_lime.columns.tolist(),
-    class_names=["Not Readmitted", "Readmitted"],
-    categorical_features=[X_lime.columns.get_loc(c) for c in categorical_cols],
-    mode='classification'
-)
+    lime_explainer = lime.lime_tabular.LimeTabularExplainer(
+        training_data=np.array(X_lime),
+        feature_names=X_lime.columns.tolist(),
+        class_names=["Not Readmitted", "Readmitted"],
+        categorical_features=[X_lime.columns.get_loc(c) for c in categorical_cols],
+        mode='classification'
+    )
 
-input_lime = input_df.copy()
-for col in categorical_cols:
-    input_lime[col] = input_lime[col].astype(str)
+    input_lime = input_df.copy()
+    for col in categorical_cols:
+        input_lime[col] = input_lime[col].astype(str)
 
-lime_exp = lime_explainer.explain_instance(
-    data_row=input_lime.iloc[0].values,
-    predict_fn=lambda x: model.predict_proba(pd.DataFrame(x, columns=input_df.columns))
-)
+    lime_exp = lime_explainer.explain_instance(
+        data_row=input_lime.iloc[0].values,
+        predict_fn=lambda x: model.predict_proba(pd.DataFrame(x, columns=input_df.columns))
+    )
 
-# Save as PNG
-fig = lime_exp.as_pyplot_figure()
-fig.savefig("lime_explanation.png", bbox_inches="tight")
-plt.close()
-st.write("✅ LIME explanation saved.")
+    # Save as PNG
+    fig = lime_exp.as_pyplot_figure()
+    fig.savefig("lime_explanation.png", bbox_inches="tight")
+    plt.close()
+    st.write("✅ LIME explanation saved.")
+except Exception as e:
+    st.error(f"Error during LIME explanation: {str(e)}")
