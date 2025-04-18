@@ -1,9 +1,17 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 import pickle
+import shap
+import lime
+import lime.lime_tabular
+import matplotlib.pyplot as plt
+import numpy as np
+import base64
 
-# ✅ Caching model and column loading
+# Streamlit page config
+st.set_page_config(page_title="ICU Readmission Predictor", layout="wide")
+
+# 📦 Load model and columns with caching
 @st.cache_resource
 def load_model():
     with open("catboost_model_smote_tomek.pkl", "rb") as f:
@@ -11,80 +19,93 @@ def load_model():
 
 @st.cache_data
 def load_columns():
-    with open("X_train_columns.pkl", "rb") as f:
-        return pickle.load(f)
+    df = pd.read_csv("hospital_readmissions.csv")
+    df = df.dropna(subset=["readmitted"])
+    X = df.drop("readmitted", axis=1)
+    categorical_cols = ['age', 'medical_specialty', 'diag_1', 'diag_2', 'diag_3',
+                        'glucose_test', 'A1Ctest', 'change', 'diabetes_med']
+    return X, categorical_cols
 
 model = load_model()
-expected_columns = load_columns()
+X_train, categorical_cols = load_columns()
 
-# ✅ Sidebar: User Inputs
-st.sidebar.title("🩺 Patient Information")
-
-age = st.sidebar.selectbox("Age Range", ['20-30', '30-40', '40-50', '50-60', '60-70', '70-80', '80-90'])
-time_in_hospital = st.sidebar.slider("Time in hospital (days)", 1, 14, 6)
-num_lab_procedures = st.sidebar.slider("Number of lab procedures", 0, 150, 41)
-num_procedures = st.sidebar.slider("Number of procedures", 0, 10, 2)
-num_medications = st.sidebar.slider("Number of medications", 1, 100, 12)
-number_outpatient = st.sidebar.slider("Outpatient visits", 0, 20, 0)
-number_emergency = st.sidebar.slider("Emergency visits", 0, 20, 1)
-number_inpatient = st.sidebar.slider("Inpatient visits", 0, 20, 0)
-
-medical_specialty = st.sidebar.selectbox("Medical Specialty", ['Cardiology', 'InternalMedicine', 'Surgery', 'Orthopedics', 'Emergency', 'GeneralPractice'])
-diag_1 = st.sidebar.text_input("Diagnosis 1 code", "428")
-diag_2 = st.sidebar.text_input("Diagnosis 2 code", "250.02")
-diag_3 = st.sidebar.text_input("Diagnosis 3 code", "401.9")
-
-glucose_test = st.sidebar.radio("Glucose test result", ["Normal", "Abnormal"])
-A1Ctest = st.sidebar.radio("A1C test done?", ["Yes", "No"])
-change = st.sidebar.radio("Change in medications?", ["Yes", "No"])
-diabetes_med = st.sidebar.radio("Is diabetes medication prescribed?", ["Yes", "No"])
-
-# ✅ Prepare input
-input_dict = {
-    "age": age,
-    "time_in_hospital": time_in_hospital,
-    "num_lab_procedures": num_lab_procedures,
-    "num_procedures": num_procedures,
-    "num_medications": num_medications,
-    "number_outpatient": number_outpatient,
-    "number_emergency": number_emergency,
-    "number_inpatient": number_inpatient,
-    "medical_specialty": medical_specialty,
-    "diag_1": diag_1,
-    "diag_2": diag_2,
-    "diag_3": diag_3,
-    "glucose_test": glucose_test,
-    "A1Ctest": A1Ctest,
-    "change": change,
-    "diabetes_med": diabetes_med
+# 🧾 Sidebar Input
+st.sidebar.header("Patient Input")
+user_input = {
+    'age': st.sidebar.selectbox("Age Range", sorted(X_train['age'].unique())),
+    'time_in_hospital': st.sidebar.slider("Time in Hospital (days)", 1, 30, 6),
+    'n_lab_procedures': 41,
+    'n_procedures': 2,
+    'n_medications': 12,
+    'n_outpatient': 0,
+    'n_emergency': 1,
+    'n_inpatient': 0,
+    'medical_specialty': 'Cardiology',
+    'diag_1': '428',
+    'diag_2': '250.02',
+    'diag_3': '401.9',
+    'glucose_test': 'Normal',
+    'A1Ctest': 'Yes',
+    'change': 'No',
+    'diabetes_med': 'Yes'
 }
 
-input_df = pd.DataFrame([input_dict])
-input_df = pd.get_dummies(input_df)
-input_df = input_df.reindex(columns=expected_columns, fill_value=0)
+# 🔄 Format input
+input_df = pd.DataFrame([user_input])
+for col in categorical_cols:
+    input_df[col] = input_df[col].astype('category')
+input_df = input_df[X_train.columns]
 
-# ✅ Main UI
-st.title("🏥 ICU Readmission Predictor")
+# 🔮 Prediction
+prediction = model.predict(input_df)[0]
+proba = model.predict_proba(input_df)[0][1]
+label = "✅ Not Readmitted" if prediction == 0 else "🔴 Readmitted"
 
-tab1, tab2 = st.tabs(["🔍 Prediction Result", "⬇️ Download Input"])
+# 📢 Display prediction result
+st.markdown("## 🏥 ICU Readmission Prediction")
+st.markdown(f"### Prediction: {label}")
+st.markdown(f"### Risk Score: **{proba:.2f}**")
 
-with tab1:
-    with st.expander("📋 View Prediction", expanded=True):
-        prediction = model.predict(input_df)[0]
-        proba = model.predict_proba(input_df)[0][1]
+# 📊 SHAP Explanation Section
+with st.expander("📈 SHAP Explanation"):
+    shap.initjs()
+    explainer = shap.TreeExplainer(model)
+    shap_values = explainer.shap_values(input_df)
+    shap_html = shap.force_plot(explainer.expected_value, shap_values, input_df)
+    shap.save_html("shap_explanation.html", shap_html)
 
-        if prediction == 1:
-            st.markdown("🔴 **Prediction: Patient is likely to be readmitted**")
-        else:
-            st.markdown("🟢 **Prediction: Patient is unlikely to be readmitted**")
+    with open("shap_explanation.html", "rb") as f:
+        btn = st.download_button("⬇️ Download SHAP Explanation (HTML)",
+                                 data=f,
+                                 file_name="shap_explanation.html",
+                                 mime="text/html")
 
-        st.markdown(f"📊 **Readmission Probability:** `{proba:.2f}`")
+# 🔍 LIME Explanation Section
+with st.expander("🔍 LIME Explanation"):
+    X_lime = X_train.copy()
+    for col in categorical_cols:
+        X_lime[col] = X_lime[col].astype(str)
 
-with tab2:
-    csv = input_df.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        label="📥 Download Patient Data",
-        data=csv,
-        file_name="patient_input.csv",
-        mime="text/csv"
+    lime_explainer = lime.lime_tabular.LimeTabularExplainer(
+        training_data=np.array(X_lime),
+        feature_names=X_lime.columns.tolist(),
+        class_names=["Not Readmitted", "Readmitted"],
+        categorical_features=[X_lime.columns.get_loc(c) for c in categorical_cols],
+        mode='classification'
     )
+
+    input_lime = input_df.copy()
+    for col in categorical_cols:
+        input_lime[col] = input_lime[col].astype(str)
+
+    lime_exp = lime_explainer.explain_instance(
+        data_row=input_lime.iloc[0].values,
+        predict_fn=lambda x: model.predict_proba(pd.DataFrame(x, columns=input_df.columns))
+    )
+
+    fig = lime_exp.as_pyplot_figure()
+    fig.savefig("lime_explanation.png", bbox_inches="tight")
+    st.image("lime_explanation.png", caption="LIME Explanation", use_column_width=True)
+
+    with open("lime_explanation.png", "rb") as f:
+        st.download_button("⬇️ Download LIME Explanation (PNG)", f, "lime_explanation.png", "image/png")
