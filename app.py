@@ -6,40 +6,74 @@ import lime
 import lime.lime_tabular
 import matplotlib.pyplot as plt
 import numpy as np
-import base64
+import os
+import sys
 
 # Streamlit page config
 st.set_page_config(page_title="ICU Readmission Predictor", layout="wide")
 
-# 📦 Load model and columns with caching
+# Debug information
+st.sidebar.header("Debug Info")
+st.sidebar.write("Python version:", sys.version)
+st.sidebar.write("Working directory:", os.getcwd())
+st.sidebar.write("Directory contents:", os.listdir())
+
+# 📦 Load model and columns with enhanced error handling
 @st.cache_resource
 def load_model():
-    with open("catboost_model_smote_tomek.pkl", "rb") as f:
-        return pickle.load(f)
+    try:
+        if not os.path.exists("catboost_model_smote_tomek.pkl"):
+            st.error("Model file not found in directory. Found these files instead:")
+            st.write(os.listdir())
+            st.stop()
+            
+        with open("catboost_model_smote_tomek.pkl", "rb") as f:
+            model = pickle.load(f)
+        st.success("✅ Model loaded successfully!")
+        return model
+    except Exception as e:
+        st.error(f"❌ Model loading failed: {str(e)}")
+        st.stop()
 
 @st.cache_data
 def load_columns():
-    df = pd.read_csv("preprocessed_hospital_readmissions")
-    df = df.dropna(subset=["readmitted"])
-    X = df.drop("readmitted", axis=1)
-    categorical_cols = ['age', 'medical_specialty', 'diag_1', 'diag_2', 'diag_3',
-                        'glucose_test', 'A1Ctest', 'change', 'diabetes_med']
-    return X, categorical_cols
+    try:
+        if not os.path.exists("preprocessed_hospital_readmissions.csv"):
+            st.error("CSV file not found in directory. Found these files instead:")
+            st.write(os.listdir())
+            st.stop()
+            
+        df = pd.read_csv("preprocessed_hospital_readmissions.csv")
+        
+        if "readmitted" not in df.columns:
+            st.error("Column 'readmitted' not found in the dataset")
+            st.stop()
+            
+        df = df.dropna(subset=["readmitted"])
+        X = df.drop("readmitted", axis=1)
+        categorical_cols = ['age', 'medical_specialty', 'diag_1', 'diag_2', 'diag_3',
+                          'glucose_test', 'A1Ctest', 'change', 'diabetes_med']
+        st.success("✅ Data loaded successfully!")
+        return X, categorical_cols
+        
+    except Exception as e:
+        st.error(f"❌ Error loading data: {str(e)}")
+        st.stop()
 
+# Load model and data
 model = load_model()
 X_train, categorical_cols = load_columns()
 
-# Initialize session state for prediction and refresh
+# Initialize session state
 if 'prediction_made' not in st.session_state:
     st.session_state.prediction_made = False
 if 'refresh' not in st.session_state:
     st.session_state.refresh = False
 
-# 🧾 Sidebar Input
-st.sidebar.header("Patient Input")
-
-# Create a form for all inputs
+# 🧾 Sidebar Input Form
 with st.sidebar.form("patient_form"):
+    st.header("Patient Input")
+    
     user_input = {
         'age': st.selectbox("Age Range", sorted(X_train['age'].unique())),
         'time_in_hospital': st.number_input("Time in Hospital (days)", min_value=1, max_value=30, value=6),
@@ -59,12 +93,9 @@ with st.sidebar.form("patient_form"):
         'diabetes_med': st.selectbox("Diabetes Medication", ['Yes', 'No'])
     }
     
-    # Create two columns for buttons
     col1, col2 = st.columns(2)
-    
     with col1:
         predict_button = st.form_submit_button("Predict")
-    
     with col2:
         refresh_button = st.form_submit_button("Refresh")
 
@@ -76,70 +107,81 @@ if refresh_button:
 
 # Handle prediction
 if predict_button and not st.session_state.refresh:
-    st.session_state.prediction_made = True
-    st.session_state.refresh = False
-    
-    # 🔄 Format input
-    input_df = pd.DataFrame([user_input])
-    for col in categorical_cols:
-        input_df[col] = input_df[col].astype('category')
-    input_df = input_df[X_train.columns]
+    try:
+        # Format input
+        input_df = pd.DataFrame([user_input])
+        for col in categorical_cols:
+            input_df[col] = input_df[col].astype('category')
+        input_df = input_df[X_train.columns]
 
-    # 🔮 Prediction
-    prediction = model.predict(input_df)[0]
-    proba = model.predict_proba(input_df)[0][1]
-    st.session_state.prediction = prediction
-    st.session_state.proba = proba
+        # Make prediction
+        prediction = model.predict(input_df)[0]
+        proba = model.predict_proba(input_df)[0][1]
+        
+        # Store in session state
+        st.session_state.prediction = prediction
+        st.session_state.proba = proba
+        st.session_state.prediction_made = True
+        st.session_state.input_df = input_df
+        
+    except Exception as e:
+        st.error(f"Prediction failed: {str(e)}")
 
-# 📢 Display prediction result only after prediction is made
+# Display results if prediction was made
 if st.session_state.prediction_made:
     st.markdown("## 🏥 ICU Readmission Prediction")
     label = "✅ The patient is not likely to be readmitted" if st.session_state.prediction == 0 else "🔴 The patient is likely to be readmitted"
     st.markdown(f"### {label}")
     st.markdown(f"### Risk Score: **{st.session_state.proba:.2f}**")
 
-    # 📊 SHAP Explanation Section
+    # SHAP Explanation
     with st.expander("📈 SHAP Explanation"):
-        shap.initjs()
-        explainer = shap.TreeExplainer(model)
-        shap_values = explainer.shap_values(input_df)
-        shap_html = shap.force_plot(explainer.expected_value, shap_values, input_df)
-        shap.save_html("shap_explanation.html", shap_html)
+        try:
+            shap.initjs()
+            explainer = shap.TreeExplainer(model)
+            shap_values = explainer.shap_values(st.session_state.input_df)
+            shap_html = shap.force_plot(explainer.expected_value, shap_values, st.session_state.input_df)
+            shap.save_html("shap_explanation.html", shap_html)
 
-        with open("shap_explanation.html", "rb") as f:
-            btn = st.download_button("⬇️ Download SHAP Explanation (HTML)",
-                                    data=f,
-                                    file_name="shap_explanation.html",
-                                    mime="text/html")
+            with open("shap_explanation.html", "rb") as f:
+                st.download_button("⬇️ Download SHAP Explanation (HTML)",
+                                  data=f,
+                                  file_name="shap_explanation.html",
+                                  mime="text/html")
+        except Exception as e:
+            st.error(f"SHAP explanation failed: {str(e)}")
 
-    # 🔍 LIME Explanation Section
+    # LIME Explanation
     with st.expander("🔍 LIME Explanation"):
-        X_lime = X_train.copy()
-        for col in categorical_cols:
-            X_lime[col] = X_lime[col].astype(str)
+        try:
+            X_lime = X_train.copy()
+            for col in categorical_cols:
+                X_lime[col] = X_lime[col].astype(str)
 
-        lime_explainer = lime.lime_tabular.LimeTabularExplainer(
-            training_data=np.array(X_lime),
-            feature_names=X_lime.columns.tolist(),
-            class_names=["Not Readmitted", "Readmitted"],
-            categorical_features=[X_lime.columns.get_loc(c) for c in categorical_cols],
-            mode='classification'
-        )
+            lime_explainer = lime.lime_tabular.LimeTabularExplainer(
+                training_data=np.array(X_lime),
+                feature_names=X_lime.columns.tolist(),
+                class_names=["Not Readmitted", "Readmitted"],
+                categorical_features=[X_lime.columns.get_loc(c) for c in categorical_cols],
+                mode='classification'
+            )
 
-        input_lime = input_df.copy()
-        for col in categorical_cols:
-            input_lime[col] = input_lime[col].astype(str)
+            input_lime = st.session_state.input_df.copy()
+            for col in categorical_cols:
+                input_lime[col] = input_lime[col].astype(str)
 
-        lime_exp = lime_explainer.explain_instance(
-            data_row=input_lime.iloc[0].values,
-            predict_fn=lambda x: model.predict_proba(pd.DataFrame(x, columns=input_df.columns))
-        )
+            lime_exp = lime_explainer.explain_instance(
+                data_row=input_lime.iloc[0].values,
+                predict_fn=lambda x: model.predict_proba(pd.DataFrame(x, columns=st.session_state.input_df.columns))
+            )
 
-        fig = lime_exp.as_pyplot_figure()
-        fig.savefig("lime_explanation.png", bbox_inches="tight")
-        st.image("lime_explanation.png", caption="LIME Explanation", use_column_width=True)
+            fig = lime_exp.as_pyplot_figure()
+            fig.savefig("lime_explanation.png", bbox_inches="tight")
+            st.image("lime_explanation.png", caption="LIME Explanation", use_column_width=True)
 
-        with open("lime_explanation.png", "rb") as f:
-            st.download_button("⬇️ Download LIME Explanation (PNG)", f, "lime_explanation.png", "image/png")
+            with open("lime_explanation.png", "rb") as f:
+                st.download_button("⬇️ Download LIME Explanation (PNG)", f, "lime_explanation.png", "image/png")
+        except Exception as e:
+            st.error(f"LIME explanation failed: {str(e)}")
 else:
-    st.info("Please fill in the patient details and click 'Predict' to see results.")
+    st.info("ℹ️ Please fill in the patient details and click 'Predict' to see results.")
