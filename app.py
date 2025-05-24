@@ -9,17 +9,18 @@ from catboost import CatBoostClassifier, Pool
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, accuracy_score, roc_auc_score, confusion_matrix
 import matplotlib.pyplot as plt
+import os
 
 # Load data
 @st.cache_data
 def load_data():
-    return pd.read_csv("updated_hospital_readmissions.csv")
+    return pd.read_csv("preprocessed_hospital_readmissions.csv")
 
 # Load or train model
 @st.cache_resource
 def load_model(X_train, y_train, X_test, y_test, categorical_columns):
     try:
-        with open("catboost_model_v2.pkl", "rb") as f:
+        with open("catboost_model.pkl", "rb") as f:
             model = pickle.load(f)
     except:
         train_pool = Pool(X_train, y_train, cat_features=categorical_columns)
@@ -27,7 +28,7 @@ def load_model(X_train, y_train, X_test, y_test, categorical_columns):
         model = CatBoostClassifier(iterations=500, learning_rate=0.05, depth=6,
                                    eval_metric='AUC', random_seed=42, early_stopping_rounds=50, verbose=False)
         model.fit(train_pool, eval_set=test_pool)
-        with open("catboost_model_v2.pkl", "wb") as f:
+        with open("catboost_model.pkl", "wb") as f:
             pickle.dump(model, f)
     return model
 
@@ -38,13 +39,8 @@ def main():
 
     df = load_data()
 
-    # Use mapped category columns for diagnosis
-    df['diag_1'] = df['diag_1_category']
-    df['diag_2'] = df['diag_2_category']
-    df['diag_3'] = df['diag_3_category']
-
-    X = df.drop(columns=["readmitted", "diag_1_raw", "diag_2_raw", "diag_3_raw",
-                         "diag_1_category", "diag_2_category", "diag_3_category"])
+    # Data prep
+    X = df.drop(columns=["readmitted"])
     y = df["readmitted"]
 
     categorical_columns = ['age', 'medical_specialty', 'diag_1', 'diag_2', 'diag_3',
@@ -59,6 +55,8 @@ def main():
     model = load_model(X_train, y_train, X_test, y_test, categorical_columns)
 
     st.sidebar.header("📋 Enter Patient Details")
+
+    # Sidebar Inputs
     user_input = {
         'age': st.sidebar.selectbox("Age Range", sorted(df['age'].unique())),
         'time_in_hospital': st.sidebar.slider("Time in hospital (days)", 1, 20, 5),
@@ -69,9 +67,9 @@ def main():
         'n_emergency': st.sidebar.slider("Emergency visits", 0, 10, 0),
         'n_inpatient': st.sidebar.slider("Inpatient visits", 0, 20, 0),
         'medical_specialty': st.sidebar.selectbox("Medical Specialty", sorted(df['medical_specialty'].dropna().unique())),
-        'diag_1': st.sidebar.selectbox("Diagnosis 1 Category", sorted(df['diag_1'].dropna().unique())),
-        'diag_2': st.sidebar.selectbox("Diagnosis 2 Category", sorted(df['diag_2'].dropna().unique())),
-        'diag_3': st.sidebar.selectbox("Diagnosis 3 Category", sorted(df['diag_3'].dropna().unique())),
+        'diag_1': st.sidebar.selectbox("Diagnosis 1 code", sorted(df['diag_1'].dropna().unique())),
+        'diag_2': st.sidebar.selectbox("Diagnosis 2 code", sorted(df['diag_2'].dropna().unique())),
+        'diag_3': st.sidebar.selectbox("Diagnosis 3 code", sorted(df['diag_3'].dropna().unique())),
         'glucose_test': st.sidebar.selectbox("Glucose Test", sorted(df['glucose_test'].unique())),
         'A1Ctest': st.sidebar.selectbox("A1C Test", sorted(df['A1Ctest'].unique())),
         'change': st.sidebar.selectbox("Medication Change", sorted(df['change'].unique())),
@@ -101,15 +99,23 @@ def main():
 
     # LIME Explanation
     with st.expander("🔍 LIME Explanation"):
+        # ✅ Convert categorical columns to numeric codes
+        X_test_lime = X_test.copy()
+        input_df_lime = input_df.copy()
+        for col in categorical_columns:
+            X_test_lime[col] = X_test_lime[col].cat.codes
+            input_df_lime[col] = input_df_lime[col].cat.codes
+
         lime_explainer = LimeTabularExplainer(
-            training_data=X_train.values,
-            feature_names=X_train.columns.tolist(),
+            training_data=X_test_lime.values,
+            feature_names=X_test.columns.tolist(),
             class_names=["Not Readmitted", "Readmitted"],
-            categorical_features=[X_train.columns.get_loc(col) for col in categorical_columns],
+            categorical_features=[X_test.columns.get_loc(col) for col in categorical_columns],
             mode='classification'
         )
+
         lime_exp = lime_explainer.explain_instance(
-            data_row=input_df.iloc[0].values,
+            data_row=input_df_lime.iloc[0].values,
             predict_fn=lambda x: model.predict_proba(pd.DataFrame(x, columns=input_df.columns))
         )
         st.pyplot(lime_exp.as_pyplot_figure())
