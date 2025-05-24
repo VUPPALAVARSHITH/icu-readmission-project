@@ -38,12 +38,10 @@ def main():
     st.title("🏥 ICU Readmission Prediction Dashboard")
 
     if not os.path.exists("preprocessed_hospital_readmissions.csv"):
-        st.error("❌ Dataset file 'preprocessed_hospital_readmissions.csv' NOT found! Please upload it alongside this script.")
+        st.error("❌ Dataset file 'preprocessed_hospital_readmissions.csv' NOT found! Please upload it.")
         st.stop()
 
     df = load_data()
-
-    # Prepare data
     X = df.drop(columns=["readmitted"])
     y = df["readmitted"]
 
@@ -60,35 +58,33 @@ def main():
 
     st.sidebar.header("📋 Enter Patient Details")
 
-    # Sidebar inputs with user-friendly categories exactly as in dataset
+    # Curated diagnosis codes
+    valid_diag_codes = ['250.01', '401.9', '272', '414', '428', '518.81', '496', '530.81', '427.31', '250.02']
+
     user_input = {}
-    user_input['age'] = st.sidebar.selectbox("Age Range", sorted(df['age'].dropna().unique()))
+    user_input['age'] = st.sidebar.selectbox("Age Range", sorted(df['age'].unique()))
     user_input['time_in_hospital'] = st.sidebar.slider("Time in hospital (days)", 1, 20, 4)
     user_input['n_lab_procedures'] = st.sidebar.slider("Number of lab procedures", 0, 100, 35)
     user_input['n_procedures'] = st.sidebar.slider("Number of procedures", 0, 10, 1)
     user_input['n_medications'] = st.sidebar.slider("Number of medications", 0, 80, 10)
-    user_input['n_outpatient'] = st.sidebar.slider("Number of outpatient visits", 0, 20, 3)
-    user_input['n_emergency'] = st.sidebar.slider("Number of emergency visits", 0, 10, 0)
-    user_input['n_inpatient'] = st.sidebar.slider("Number of inpatient visits", 0, 20, 0)
+    user_input['n_outpatient'] = st.sidebar.slider("Outpatient visits", 0, 20, 3)
+    user_input['n_emergency'] = st.sidebar.slider("Emergency visits", 0, 10, 0)
+    user_input['n_inpatient'] = st.sidebar.slider("Inpatient visits", 0, 20, 0)
     user_input['medical_specialty'] = st.sidebar.selectbox("Medical Specialty", sorted(df['medical_specialty'].dropna().unique()))
-    user_input['diag_1'] = st.sidebar.selectbox("Diagnosis 1 code", sorted(df['diag_1'].dropna().unique()))
-    user_input['diag_2'] = st.sidebar.selectbox("Diagnosis 2 code", sorted(df['diag_2'].dropna().unique()))
-    user_input['diag_3'] = st.sidebar.selectbox("Diagnosis 3 code", sorted(df['diag_3'].dropna().unique()))
-    user_input['glucose_test'] = st.sidebar.selectbox("Glucose test result", sorted(df['glucose_test'].dropna().unique()))
-    user_input['A1Ctest'] = st.sidebar.selectbox("A1C test done?", sorted(df['A1Ctest'].dropna().unique()))
-    user_input['change'] = st.sidebar.selectbox("Change in medications?", sorted(df['change'].dropna().unique()))
-    user_input['diabetes_med'] = st.sidebar.selectbox("Is diabetes medication prescribed?", sorted(df['diabetes_med'].dropna().unique()))
+    user_input['diag_1'] = st.sidebar.selectbox("Diagnosis 1 Code", valid_diag_codes)
+    user_input['diag_2'] = st.sidebar.selectbox("Diagnosis 2 Code", valid_diag_codes)
+    user_input['diag_3'] = st.sidebar.selectbox("Diagnosis 3 Code", valid_diag_codes)
+    user_input['glucose_test'] = st.sidebar.selectbox("Glucose Test", ['Normal', 'Abnormal', 'None'])
+    user_input['A1Ctest'] = st.sidebar.selectbox("A1C Test done?", ['Yes', 'No'])
+    user_input['change'] = st.sidebar.selectbox("Change in Medications?", ['Yes', 'No'])
+    user_input['diabetes_med'] = st.sidebar.selectbox("Diabetes Medication Prescribed?", ['Yes', 'No'])
 
     input_df = pd.DataFrame([user_input])
-
-    # Cast categorical columns with same categories as training set
     for col in categorical_columns:
         input_df[col] = input_df[col].astype('category')
-        input_df[col].cat.set_categories(X_train[col].cat.categories, inplace=True)
-
     input_df = input_df[X_train.columns]
 
-    # Prediction
+    # Make prediction
     proba = model.predict_proba(input_df)[0][1]
     prediction = model.predict(input_df)[0]
 
@@ -104,33 +100,30 @@ def main():
         shap.summary_plot(shap_values, X_test, plot_type="bar", show=False)
         st.pyplot(fig)
 
-    # LIME Explanation with error handling to skip if fails
+    # LIME Explanation
     with st.expander("🔍 LIME Explanation"):
-        try:
-            X_lime = X_test.copy()
-            for col in categorical_columns:
-                X_lime[col] = X_lime[col].astype(str)
+        X_lime = X_test.copy()
+        for col in categorical_columns:
+            X_lime[col] = X_lime[col].astype(str)
 
-            lime_explainer = LimeTabularExplainer(
-                training_data=np.array(X_lime),
-                feature_names=X_lime.columns.tolist(),
-                class_names=["Not Readmitted", "Readmitted"],
-                categorical_features=[X_lime.columns.get_loc(col) for col in categorical_columns],
-                mode='classification'
-            )
+        lime_explainer = LimeTabularExplainer(
+            training_data=X_lime.values,
+            feature_names=X_lime.columns.tolist(),
+            class_names=["Not Readmitted", "Readmitted"],
+            categorical_features=[X_lime.columns.get_loc(col) for col in categorical_columns],
+            mode='classification'
+        )
 
-            lime_input = input_df.copy()
-            for col in categorical_columns:
-                lime_input[col] = lime_input[col].astype(str)
+        lime_input = input_df.copy()
+        for col in categorical_columns:
+            lime_input[col] = lime_input[col].astype(str)
 
-            lime_exp = lime_explainer.explain_instance(
-                data_row=lime_input.iloc[0].values,
-                predict_fn=lambda x: model.predict_proba(pd.DataFrame(x, columns=input_df.columns))
-            )
-            fig = lime_exp.as_pyplot_figure()
-            st.pyplot(fig)
-        except Exception:
-            st.warning("LIME explanation failed to generate due to input data mismatch or other issues.")
+        lime_exp = lime_explainer.explain_instance(
+            data_row=lime_input.iloc[0].values,
+            predict_fn=lambda x: model.predict_proba(pd.DataFrame(x, columns=input_df.columns))
+        )
+        fig = lime_exp.as_pyplot_figure()
+        st.pyplot(fig)
 
     # Model Evaluation
     with st.expander("📈 Model Evaluation Metrics"):
