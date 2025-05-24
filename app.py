@@ -136,18 +136,6 @@ def main():
         except Exception:
             st.warning("⚠️ LIME explanation is currently unavailable due to an internal error.")
 
-    # Model Evaluation
-    with st.expander("📈 Model Evaluation Metrics"):
-        y_pred = model.predict(X_test)
-        y_proba = model.predict_proba(X_test)[:, 1]
-        st.write("*Classification Report:*")
-        st.text(classification_report(y_test, y_pred))
-        st.write(f"*ROC AUC Score:* {roc_auc_score(y_test, y_proba):.2f}")
-        st.write(f"*Accuracy:* {accuracy_score(y_test, y_pred):.2f}")
-        st.write("*Confusion Matrix:*")
-        cm = confusion_matrix(y_test, y_pred)
-        cm_df = pd.DataFrame(cm, index=["Actual 0", "Actual 1"], columns=["Pred 0", "Pred 1"])
-        st.dataframe(cm_df)
-
+    
 if __name__ == "__main__":
     main()
