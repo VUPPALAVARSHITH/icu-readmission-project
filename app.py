@@ -11,10 +11,14 @@ from sklearn.metrics import classification_report, accuracy_score, roc_auc_score
 import matplotlib.pyplot as plt
 import os
 
+
 # Load data
 @st.cache_data
 def load_data():
-    return pd.read_csv("preprocessed_hospital_readmissions.csv")
+    path = "preprocessed_hospital_readmissions.csv"
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Dataset not found at {path}")
+    return pd.read_csv(path)
 
 # Load or train model
 @st.cache_resource
