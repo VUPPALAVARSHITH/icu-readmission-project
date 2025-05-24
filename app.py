@@ -1,98 +1,144 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import pickle
 import shap
 import lime
 from lime.lime_tabular import LimeTabularExplainer
-import joblib
-from catboost import CatBoostClassifier
-from sklearn.preprocessing import OneHotEncoder
+from catboost import CatBoostClassifier, Pool
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report, accuracy_score, roc_auc_score, confusion_matrix
+import matplotlib.pyplot as plt
 import os
-
-st.set_page_config(page_title="ICU Readmission Predictor", layout="centered")
 
 # Load data
 @st.cache_data
 def load_data():
-    return pd.read_csv("preprocessed_hospital_readmissions.csv")
+    df = pd.read_csv("preprocessed_hospital_readmissions.csv")  # Relative path, no absolute Windows path!
+    return df
 
-# Preprocess data
-def preprocess_data(df):
-    X = df.drop("readmitted", axis=1)
-    y = df["readmitted"]
-
-    categorical_features = X.select_dtypes(include=["object"]).columns.tolist()
-    
-    encoder = OneHotEncoder(sparse_output=False, handle_unknown="ignore")  # Use 'sparse=False' if sklearn < 1.2
-    X_encoded = encoder.fit_transform(X[categorical_features])
-    encoded_df = pd.DataFrame(X_encoded, columns=encoder.get_feature_names_out(categorical_features))
-
-    X_numeric = X.drop(columns=categorical_features).reset_index(drop=True)
-    X_final = pd.concat([X_numeric.reset_index(drop=True), encoded_df.reset_index(drop=True)], axis=1)
-
-    return X_final, y, encoder
-
-# Load model
+# Load or train model
 @st.cache_resource
-def load_model():
-    return joblib.load("catboost_model_smote_tomek.pkl")
+def load_model(X_train, y_train, X_test, y_test, categorical_columns):
+    try:
+        with open("catboost_model.pkl", "rb") as f:
+            model = pickle.load(f)
+    except:
+        train_pool = Pool(X_train, y_train, cat_features=categorical_columns)
+        test_pool = Pool(X_test, y_test, cat_features=categorical_columns)
+        model = CatBoostClassifier(iterations=500, learning_rate=0.05, depth=6,
+                                   eval_metric='AUC', random_seed=42, early_stopping_rounds=50, verbose=False)
+        model.fit(train_pool, eval_set=test_pool)
+        with open("catboost_model.pkl", "wb") as f:
+            pickle.dump(model, f)
+    return model
 
-# SHAP explanation
-def shap_explanation(model, X_sample):
-    explainer = shap.Explainer(model)
-    shap_values = explainer(X_sample)
-    st.subheader("SHAP Explanation")
-    st.pyplot(shap.plots.waterfall(shap_values[0], show=False))
-
-# LIME explanation
-def lime_explanation(model, X_train, X_sample, feature_names):
-    lime_explainer = LimeTabularExplainer(
-        training_data=np.array(X_train),
-        feature_names=feature_names,
-        class_names=["Not Readmitted", "Readmitted"],
-        mode='classification'
-    )
-    explanation = lime_explainer.explain_instance(
-        data_row=X_sample[0],
-        predict_fn=model.predict_proba
-    )
-    st.subheader("LIME Explanation")
-    st.components.v1.html(explanation.as_html(), height=800, scrolling=True)
-
+# Main App
 def main():
-    st.title("🏥 ICU Readmission Risk Predictor")
+    st.set_page_config(page_title="ICU Readmission Predictor", layout="wide")
+    st.title("🏥 ICU Readmission Prediction Dashboard")
+
+    # DEBUG: Check current directory and files to confirm CSV presence
+    st.write("Current working directory:", os.getcwd())
+    st.write("Files in directory:", os.listdir())
+    if not os.path.exists("preprocessed_hospital_readmissions.csv"):
+        st.error("❌ Dataset file 'preprocessed_hospital_readmissions.csv' NOT found! Please upload it alongside this script.")
+        st.stop()
 
     df = load_data()
-    X, y, encoder = preprocess_data(df)
-    model = load_model()
 
-    st.write("### Enter Patient Details")
+    # Data prep
+    X = df.drop(columns=["readmitted"])
+    y = df["readmitted"]
+
+    categorical_columns = ['age', 'medical_specialty', 'diag_1', 'diag_2', 'diag_3',
+                           'glucose_test', 'A1Ctest', 'change', 'diabetes_med']
+
+    for col in categorical_columns:
+        X[col] = X[col].astype('category')
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, stratify=y, random_state=42)
+
+    model = load_model(X_train, y_train, X_test, y_test, categorical_columns)
+
+    st.sidebar.header("📋 Enter Patient Details")
+
+    # Sidebar Inputs
     user_input = {}
-    for column in df.drop("readmitted", axis=1).columns:
-        if df[column].dtype == 'object':
-            user_input[column] = st.selectbox(f"{column}:", df[column].unique())
-        else:
-            user_input[column] = st.number_input(f"{column}:", float(df[column].min()), float(df[column].max()), float(df[column].mean()))
+    user_input['age'] = st.sidebar.selectbox("Age Range", df['age'].unique())
+    user_input['time_in_hospital'] = st.sidebar.slider("Time in hospital (days)", 1, 20, 5)
+    user_input['n_lab_procedures'] = st.sidebar.slider("Number of lab procedures", 0, 100, 40)
+    user_input['n_procedures'] = st.sidebar.slider("Number of procedures", 0, 10, 1)
+    user_input['n_medications'] = st.sidebar.slider("Number of medications", 0, 80, 20)
+    user_input['n_outpatient'] = st.sidebar.slider("Outpatient visits", 0, 20, 0)
+    user_input['n_emergency'] = st.sidebar.slider("Emergency visits", 0, 10, 0)
+    user_input['n_inpatient'] = st.sidebar.slider("Inpatient visits", 0, 20, 0)
+    user_input['medical_specialty'] = st.sidebar.selectbox("Medical Specialty", df['medical_specialty'].dropna().unique())
+    user_input['diag_1'] = st.sidebar.selectbox("Diagnosis 1", df['diag_1'].dropna().unique())
+    user_input['diag_2'] = st.sidebar.selectbox("Diagnosis 2", df['diag_2'].dropna().unique())
+    user_input['diag_3'] = st.sidebar.selectbox("Diagnosis 3", df['diag_3'].dropna().unique())
+    user_input['glucose_test'] = st.sidebar.selectbox("Glucose Test", df['glucose_test'].unique())
+    user_input['A1Ctest'] = st.sidebar.selectbox("A1C Test", df['A1Ctest'].unique())
+    user_input['change'] = st.sidebar.selectbox("Medication Change", df['change'].unique())
+    user_input['diabetes_med'] = st.sidebar.selectbox("Diabetes Medication", df['diabetes_med'].unique())
 
-    user_df = pd.DataFrame([user_input])
-    user_categorical = user_df.select_dtypes(include=["object"])
-    user_encoded = encoder.transform(user_categorical)
-    user_encoded_df = pd.DataFrame(user_encoded, columns=encoder.get_feature_names_out(user_categorical.columns))
-    user_numeric = user_df.drop(columns=user_categorical.columns)
-    user_final = pd.concat([user_numeric.reset_index(drop=True), user_encoded_df.reset_index(drop=True)], axis=1)
+    input_df = pd.DataFrame([user_input])
+    for col in categorical_columns:
+        input_df[col] = input_df[col].astype('category')
+    input_df = input_df[X_train.columns]
 
-    if st.button("Predict"):
-        prediction = model.predict(user_final)[0]
-        probability = model.predict_proba(user_final)[0][1]
+    # Make prediction
+    proba = model.predict_proba(input_df)[0][1]
+    prediction = model.predict(input_df)[0]
 
-        if prediction == 1:
-            st.error(f"⚠️ The patient is likely to be readmitted. (Risk Score: {probability:.2f})")
-        else:
-            st.success(f"✅ The patient is unlikely to be readmitted. (Risk Score: {probability:.2f})")
+    st.subheader("📍 Prediction Result")
+    st.write(f"*Prediction:* {'🟥 Readmitted' if prediction == 1 else '🟩 Not Readmitted'}")
+    st.write(f"*Risk Score:* {proba:.2f}")
 
-        # SHAP and LIME
-        shap_explanation(model, user_final)
-        lime_explanation(model, X, user_final.to_numpy(), user_final.columns.tolist())
+    # SHAP Explanation
+    with st.expander("📊 SHAP Explanation"):
+        explainer = shap.TreeExplainer(model)
+        shap_values = explainer.shap_values(X_test)
+        fig, ax = plt.subplots()
+        shap.summary_plot(shap_values, X_test, plot_type="bar", show=False)
+        st.pyplot(fig)
+
+    # LIME Explanation
+    with st.expander("🔍 LIME Explanation"):
+        X_lime = X_test.copy()
+        for col in categorical_columns:
+            X_lime[col] = X_lime[col].astype(str)
+
+        lime_explainer = LimeTabularExplainer(
+            training_data=np.array(X_lime),
+            feature_names=X_lime.columns.tolist(),
+            class_names=["Not Readmitted", "Readmitted"],
+            categorical_features=[X_lime.columns.get_loc(col) for col in categorical_columns],
+            mode='classification'
+        )
+
+        lime_input = input_df.copy()
+        for col in categorical_columns:
+            lime_input[col] = lime_input[col].astype(str)
+
+        lime_exp = lime_explainer.explain_instance(
+            data_row=lime_input.iloc[0].values,
+            predict_fn=lambda x: model.predict_proba(pd.DataFrame(x, columns=input_df.columns))
+        )
+        fig = lime_exp.as_pyplot_figure()
+        st.pyplot(fig)
+
+    # Model Evaluation
+    with st.expander("📈 Model Evaluation Metrics"):
+        y_pred = model.predict(X_test)
+        y_proba = model.predict_proba(X_test)[:, 1]
+        st.write("*Classification Report:*")
+        st.text(classification_report(y_test, y_pred))
+        st.write(f"*ROC AUC Score:* {roc_auc_score(y_test, y_proba):.2f}")
+        st.write(f"*Accuracy:* {accuracy_score(y_test, y_pred):.2f}")
+        st.write("*Confusion Matrix:*")
+        st.dataframe(pd.DataFrame(confusion_matrix(y_test, y_pred)))
 
 if __name__ == "__main__":
     main()
