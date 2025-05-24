@@ -2,7 +2,6 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import pickle
 import shap
 import lime
 from lime.lime_tabular import LimeTabularExplainer
@@ -20,24 +19,23 @@ def load_data():
 # Load or train model
 @st.cache_resource
 def load_model(X_train, y_train, X_test, y_test, categorical_columns):
+    model = CatBoostClassifier()
     try:
-        with open("catboost_model.pkl", "rb") as f:
-            model = pickle.load(f)
+        model.load_model("catboost_model.cbm")
     except:
         train_pool = Pool(X_train, y_train, cat_features=categorical_columns)
         test_pool = Pool(X_test, y_test, cat_features=categorical_columns)
         model = CatBoostClassifier(iterations=500, learning_rate=0.05, depth=6,
                                    eval_metric='AUC', random_seed=42, early_stopping_rounds=50, verbose=False)
         model.fit(train_pool, eval_set=test_pool)
-        with open("catboost_model.pkl", "wb") as f:
-            pickle.dump(model, f)
+        model.save_model("catboost_model.cbm")
     return model
 
 # Main App
 def main():
     st.set_page_config(page_title="ICU Readmission Predictor", layout="wide")
     st.title("🏥 ICU Readmission Prediction Dashboard")
-    
+
     df = load_data()
 
     # Data prep
@@ -49,7 +47,7 @@ def main():
 
     for col in categorical_columns:
         X[col] = X[col].astype('category')
-    
+
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, stratify=y, random_state=42)
 
@@ -88,13 +86,15 @@ def main():
     st.subheader("📍 Prediction Result")
     st.write(f"*Prediction:* {'🟥 Readmitted' if prediction == 1 else '🟩 Not Readmitted'}")
     st.write(f"*Risk Score:* {proba:.2f}")
+    st.write(f"*Risk Level:* {'🔴 High' if proba > 0.7 else '🟠 Medium' if proba > 0.4 else '🟢 Low'}")
 
     # SHAP
     with st.expander("📊 SHAP Explanation"):
         explainer = shap.TreeExplainer(model)
         shap_values = explainer.shap_values(X_test)
+        shap_type = st.selectbox("SHAP Plot Type", ["bar", "beeswarm"])
         fig, ax = plt.subplots()
-        shap.summary_plot(shap_values, X_test, plot_type="bar", show=False)
+        shap.summary_plot(shap_values, X_test, plot_type=shap_type, show=False)
         st.pyplot(fig)
 
     # LIME
@@ -133,5 +133,5 @@ def main():
         st.write("*Confusion Matrix:*")
         st.dataframe(pd.DataFrame(confusion_matrix(y_test, y_pred)))
 
-if _name_ == '_main_':
+if __name__ == "__main__":
     main()
