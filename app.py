@@ -1,7 +1,7 @@
-# app.py
 import streamlit as st
 import pandas as pd
 import numpy as np
+import pickle
 import shap
 import lime
 from lime.lime_tabular import LimeTabularExplainer
@@ -9,32 +9,41 @@ from catboost import CatBoostClassifier, Pool
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, accuracy_score, roc_auc_score, confusion_matrix
 import matplotlib.pyplot as plt
+import os
 
 # Load data
 @st.cache_data
 def load_data():
-    df = pd.read_csv(r"C:\Users\varsh\OneDrive\Desktop\minor_project\preprocessed_hospital_readmissions.csv")
+    df = pd.read_csv("preprocessed_hospital_readmissions.csv")  # Relative path, no absolute Windows path!
     return df
 
 # Load or train model
 @st.cache_resource
 def load_model(X_train, y_train, X_test, y_test, categorical_columns):
-    model = CatBoostClassifier()
     try:
-        model.load_model("catboost_model.cbm")
+        with open("catboost_model.pkl", "rb") as f:
+            model = pickle.load(f)
     except:
         train_pool = Pool(X_train, y_train, cat_features=categorical_columns)
         test_pool = Pool(X_test, y_test, cat_features=categorical_columns)
         model = CatBoostClassifier(iterations=500, learning_rate=0.05, depth=6,
                                    eval_metric='AUC', random_seed=42, early_stopping_rounds=50, verbose=False)
         model.fit(train_pool, eval_set=test_pool)
-        model.save_model("catboost_model.cbm")
+        with open("catboost_model.pkl", "wb") as f:
+            pickle.dump(model, f)
     return model
 
 # Main App
 def main():
     st.set_page_config(page_title="ICU Readmission Predictor", layout="wide")
     st.title("🏥 ICU Readmission Prediction Dashboard")
+
+    # DEBUG: Check current directory and files to confirm CSV presence
+    st.write("Current working directory:", os.getcwd())
+    st.write("Files in directory:", os.listdir())
+    if not os.path.exists("preprocessed_hospital_readmissions.csv"):
+        st.error("❌ Dataset file 'preprocessed_hospital_readmissions.csv' NOT found! Please upload it alongside this script.")
+        st.stop()
 
     df = load_data()
 
@@ -86,18 +95,16 @@ def main():
     st.subheader("📍 Prediction Result")
     st.write(f"*Prediction:* {'🟥 Readmitted' if prediction == 1 else '🟩 Not Readmitted'}")
     st.write(f"*Risk Score:* {proba:.2f}")
-    st.write(f"*Risk Level:* {'🔴 High' if proba > 0.7 else '🟠 Medium' if proba > 0.4 else '🟢 Low'}")
 
-    # SHAP
+    # SHAP Explanation
     with st.expander("📊 SHAP Explanation"):
         explainer = shap.TreeExplainer(model)
         shap_values = explainer.shap_values(X_test)
-        shap_type = st.selectbox("SHAP Plot Type", ["bar", "beeswarm"])
         fig, ax = plt.subplots()
-        shap.summary_plot(shap_values, X_test, plot_type=shap_type, show=False)
+        shap.summary_plot(shap_values, X_test, plot_type="bar", show=False)
         st.pyplot(fig)
 
-    # LIME
+    # LIME Explanation
     with st.expander("🔍 LIME Explanation"):
         X_lime = X_test.copy()
         for col in categorical_columns:
@@ -122,7 +129,7 @@ def main():
         fig = lime_exp.as_pyplot_figure()
         st.pyplot(fig)
 
-    # Evaluation
+    # Model Evaluation
     with st.expander("📈 Model Evaluation Metrics"):
         y_pred = model.predict(X_test)
         y_proba = model.predict_proba(X_test)[:, 1]
